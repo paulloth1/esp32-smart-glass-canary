@@ -1,0 +1,14 @@
+{
+  "name": "Smart Glass Canary",
+  "version": "1.1.0",
+  "funding_url": "https://github.com/paulloth1/esp32-smart-glass-canary",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32",
+      "parts": [
+        { "path": "canary-merged.bin", "offset": 0 }
+      ]
+    }
+  ]
+}

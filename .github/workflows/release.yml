@@ -1,0 +1,230 @@
+name: Release firmware
+
+# Builds a credential-free, single-file flashable image and attaches it to the
+# GitHub Release for the pushed tag.
+#
+# The local developer build is flash.sh; this workflow deliberately mirrors it
+# (same FQBN, same huge_app partition scheme) so what CI ships is what was
+# tested on hardware.
+
+on:
+  push:
+    tags:
+      - "v*"
+  # Allow running by hand (e.g. to re-test the build without cutting a tag).
+  # A manual run compiles and uploads the image as a workflow artifact but does
+  # not create or touch a Release -- see the upload steps below.
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build and publish merged.bin
+    runs-on: ubuntu-latest
+
+    # Least privilege: this job only needs to write Releases. Nothing else in
+    # the repo is writable with this token.
+    permissions:
+      contents: write
+
+    env:
+      # Everything version-pinned lives here so upgrades are a one-line edit.
+      SKETCH_DIR: firmware
+      FQBN: esp32:esp32:esp32
+      PARTITION_SCHEME: huge_app
+      ESP32_CORE_VERSION: "3.3.11"
+      ESP32_INDEX_URL: https://espressif.github.io/arduino-esp32/package_esp32_index.json
+      LIB_NIMBLE: "NimBLE-Arduino@2.5.1"
+      LIB_PUBSUBCLIENT: "PubSubClient@2.8"
+      LIB_IMPROV: "Improv WiFi Library@0.0.1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install arduino-cli
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Install ESP32 core ${{ env.ESP32_CORE_VERSION }}
+        run: |
+          set -euo pipefail
+          # Register the Espressif board manager index, then install the exact
+          # core version this firmware is built and tested against. Pinning
+          # matters: core updates move the toolchain, the BLE stack and the
+          # bundled partition CSVs underneath us.
+          arduino-cli config init --overwrite
+          arduino-cli config add board_manager.additional_urls "$ESP32_INDEX_URL"
+          arduino-cli core update-index
+          arduino-cli core install "esp32:esp32@${ESP32_CORE_VERSION}"
+          arduino-cli core list
+
+      - name: Install libraries
+        run: |
+          set -euo pipefail
+          # Versions pinned for reproducible builds. NimBLE 2.x in particular is
+          # not API-compatible with 1.x.
+          arduino-cli lib install "$LIB_NIMBLE"
+          arduino-cli lib install "$LIB_PUBSUBCLIENT"
+          arduino-cli lib install "$LIB_IMPROV"
+          arduino-cli lib list
+
+      - name: Stage placeholder secrets.h
+        run: |
+          set -euo pipefail
+          # ---------------------------------------------------------------
+          # THE SECURITY PROPERTY OF THIS WHOLE PIPELINE
+          #
+          # firmware/secrets.h is gitignored and never reaches CI. We compile
+          # against firmware/secrets.h.example, which contains ONLY
+          # placeholders, so the built binary contains NO Wi-Fi credentials
+          # and is safe to distribute publicly. Devices are configured
+          # afterwards over Improv serial (see firmware/provisioning.h).
+          #
+          # Never replace this with a real secrets.h from GitHub Secrets: the
+          # resulting binary would be a public download containing the
+          # maintainer's Wi-Fi password in plain .rodata.
+          # ---------------------------------------------------------------
+          cp "${SKETCH_DIR}/secrets.h.example" "${SKETCH_DIR}/secrets.h"
+
+      - name: Verify secrets.h contains only placeholders
+        run: |
+          set -euo pipefail
+          SECRETS="${SKETCH_DIR}/secrets.h"
+
+          # Hard gate #1: the literal placeholders must still be present.
+          # If someone wired real credentials into the build, these are gone.
+          grep -q 'YOUR_SSID' "$SECRETS" \
+            || { echo "::error::${SECRETS} does not contain YOUR_SSID -- refusing to build a possibly credential-bearing image."; exit 1; }
+          grep -q 'YOUR_PASSWORD' "$SECRETS" \
+            || { echo "::error::${SECRETS} does not contain YOUR_PASSWORD -- refusing to build a possibly credential-bearing image."; exit 1; }
+
+          # Hard gate #2: it must be byte-identical to the committed example.
+          # Catches any extra #define (MQTT_USER/MQTT_PASS, a webhook URL that
+          # describes someone's LAN, ...) that a build step might have injected.
+          diff -u "${SKETCH_DIR}/secrets.h.example" "$SECRETS" \
+            || { echo "::error::${SECRETS} differs from secrets.h.example -- refusing to build."; exit 1; }
+
+          echo "secrets.h is the unmodified placeholder template. Safe to compile."
+
+      - name: Compile firmware
+        run: |
+          set -euo pipefail
+          # --output-dir implies --export-binaries, so build/ ends up holding
+          # the bootloader, the partition table and the application image --
+          # all three are needed for the offset-0 merge below.
+          arduino-cli compile \
+            --fqbn "$FQBN" \
+            --board-options "PartitionScheme=${PARTITION_SCHEME}" \
+            --output-dir build \
+            "$SKETCH_DIR"
+          ls -l build
+
+      - name: Install esptool
+        run: |
+          set -euo pipefail
+          # Installed into a venv because Ubuntu's system Python is
+          # externally-managed (PEP 668) and a bare `pip install` can refuse.
+          #
+          # Pinned to the v5 series on purpose: v5 renamed the subcommand to
+          # `merge-bin` (hyphen). esptool v4 spelled it `merge_bin`
+          # (underscore) and shipped as `esptool.py`. The merge step below uses
+          # the v5 spelling; the v4 equivalent is commented there.
+          python3 -m venv "$HOME/.esptool-venv"
+          "$HOME/.esptool-venv/bin/pip" install --quiet --upgrade pip
+          "$HOME/.esptool-venv/bin/pip" install --quiet "esptool~=5.0"
+          "$HOME/.esptool-venv/bin/esptool" version
+
+      - name: Merge into a single flashable image at offset 0
+        run: |
+          set -euo pipefail
+
+          # ===============================================================
+          # FLASH LAYOUT -- classic ESP32, 4MB, huge_app partition scheme.
+          # Edit these four offsets if a local build says otherwise; nothing
+          # else in this workflow hard-codes them.
+          # ===============================================================
+          OFFSET_BOOTLOADER=0x1000    # second-stage bootloader
+          OFFSET_PARTITIONS=0x8000    # partition table
+          OFFSET_BOOT_APP0=0xe000     # otadata / boot_app0 selector
+          OFFSET_APPLICATION=0x10000  # the application itself
+          # (On ESP32-S3/C3 the bootloader lives at 0x0, not 0x1000.)
+
+          ESPTOOL="$HOME/.esptool-venv/bin/esptool"
+
+          # arduino-cli names exports after the sketch, e.g.
+          # firmware.ino.bootloader.bin. Globbed rather than hard-coded so a
+          # sketch rename does not silently break the merge.
+          BOOTLOADER_BIN=$(ls build/*.ino.bootloader.bin)
+          PARTITIONS_BIN=$(ls build/*.ino.partitions.bin)
+          # NB: the glob *.ino.bin does not match *.ino.bootloader.bin or
+          # *.ino.partitions.bin, so this picks up the application alone.
+          APPLICATION_BIN=$(ls build/*.ino.bin)
+
+          # boot_app0.bin is not produced by the compile -- it ships inside the
+          # installed ESP32 core, so locate it there.
+          BOOT_APP0_BIN=$(find "$HOME/.arduino15/packages/esp32" -name boot_app0.bin -print -quit)
+          if [ -z "$BOOT_APP0_BIN" ]; then
+            echo "::error::boot_app0.bin not found in the installed ESP32 core."
+            exit 1
+          fi
+
+          echo "bootloader : $BOOTLOADER_BIN"
+          echo "partitions : $PARTITIONS_BIN"
+          echo "boot_app0  : $BOOT_APP0_BIN"
+          echo "application: $APPLICATION_BIN"
+
+          # esptool v5 syntax. The v4 equivalent is the same line with
+          # `esptool.py` and `merge_bin` (underscore) instead of `merge-bin`.
+          # --flash-mode/--flash-freq/--flash-size match flash.sh's verified
+          # hardware: ESP32-D0WD-V3, 4MB flash, 40MHz crystal.
+          "$ESPTOOL" --chip esp32 merge-bin \
+            --format raw \
+            --output merged.bin \
+            --flash-mode dio \
+            --flash-freq 40m \
+            --flash-size 4MB \
+            "$OFFSET_BOOTLOADER"   "$BOOTLOADER_BIN" \
+            "$OFFSET_PARTITIONS"   "$PARTITIONS_BIN" \
+            "$OFFSET_BOOT_APP0"    "$BOOT_APP0_BIN" \
+            "$OFFSET_APPLICATION"  "$APPLICATION_BIN"
+
+          ls -l merged.bin
+
+      - name: Verify the image carries no credentials
+        run: |
+          set -euo pipefail
+          # Positive proof that the placeholder build is the one that shipped:
+          # WIFI_SSID / WIFI_PASS are used as runtime defaults in
+          # provisioning.h, so their literals land in .rodata and survive into
+          # merged.bin. If a real credential had been compiled in, these
+          # placeholder strings would be absent.
+          #
+          # If a future refactor stops embedding these defaults, this check
+          # will start failing honestly -- relax it deliberately, do not delete
+          # it, and keep the secrets.h gate above intact.
+          for placeholder in YOUR_SSID YOUR_PASSWORD; do
+            if grep -q -a "$placeholder" merged.bin; then
+              echo "OK: merged.bin contains the placeholder '$placeholder'."
+            else
+              echo "::error::merged.bin does not contain '$placeholder'. The image may have been built with real credentials -- refusing to publish."
+              exit 1
+            fi
+          done
+
+      # Always keep the image as a workflow artifact, so manual
+      # (workflow_dispatch) runs are useful and tag runs are debuggable.
+      - name: Upload merged.bin as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: merged-bin
+          path: merged.bin
+          if-no-files-found: error
+
+      # Only tag pushes create/attach a Release; a manual run stops above.
+      - name: Attach merged.bin to the Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: merged.bin
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

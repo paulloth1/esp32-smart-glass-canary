@@ -45,7 +45,7 @@
   #endif
 #endif
 
-#define FW_VERSION   "1.0.0"
+#define FW_VERSION   "1.1.0"
 #define MAX_TRACKED  32
 #define ALERT_HOLD_MS 8000UL
 

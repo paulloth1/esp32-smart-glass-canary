@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Smart Glass Canary — firmware installer</title>
+<meta name="description" content="Install the Smart Glass Canary firmware onto an ESP32 from your browser. Requires Chrome or Edge on a desktop computer.">
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #fbfbfa;
+    --fg: #1b1b1a;
+    --muted: #5c5c58;
+    --rule: #ddddd8;
+    --panel: #f2f2ee;
+    --accent: #8a5a00;
+    --warn-bg: #fdf4e3;
+    --warn-rule: #e0c68a;
+    --link: #1a4f8a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16171a;
+      --fg: #e6e6e3;
+      --muted: #a0a09b;
+      --rule: #303237;
+      --panel: #1e2024;
+      --accent: #e0b062;
+      --warn-bg: #241f16;
+      --warn-rule: #5c4a24;
+      --link: #7fb2e8;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 2rem 1.15rem 4rem;
+    background: var(--bg);
+    color: var(--fg);
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+  main { max-width: 40rem; margin: 0 auto; }
+  h1 { font-size: 1.5rem; line-height: 1.25; margin: 0 0 .4rem; }
+  h2 { font-size: 1.1rem; margin: 2.2rem 0 .6rem; }
+  h3 { font-size: .95rem; margin: 1.4rem 0 .4rem; }
+  p, li { margin: 0 0 .8rem; }
+  .lede { color: var(--muted); }
+  a { color: var(--link); }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: .875em;
+    background: var(--panel);
+    padding: .1em .35em;
+    border-radius: 3px;
+  }
+  .note {
+    background: var(--warn-bg);
+    border: 1px solid var(--warn-rule);
+    border-radius: 6px;
+    padding: .9rem 1rem;
+    margin: 1.2rem 0;
+  }
+  .note p:last-child, .note ul:last-child { margin-bottom: 0; }
+  .note strong { color: var(--accent); }
+  .installer {
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    background: var(--panel);
+    padding: 1.3rem 1rem;
+    margin: 1.5rem 0;
+    text-align: center;
+  }
+  button.install {
+    font: inherit;
+    font-weight: 600;
+    padding: .7rem 1.6rem;
+    min-height: 44px;
+    color: var(--bg);
+    background: var(--fg);
+    border: 0;
+    border-radius: 5px;
+    cursor: pointer;
+  }
+  button.install:hover { opacity: .85; }
+  .fallback { color: var(--muted); font-size: .95rem; display: block; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0 0 1rem;
+    font-size: .95rem;
+  }
+  th, td {
+    text-align: left;
+    padding: .45rem .5rem .45rem 0;
+    border-bottom: 1px solid var(--rule);
+    vertical-align: top;
+  }
+  th { font-weight: 600; }
+  ol, ul { padding-left: 1.4rem; }
+  footer {
+    margin-top: 2.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--rule);
+    color: var(--muted);
+    font-size: .9rem;
+  }
+</style>
+</head>
+<body>
+<main>
+
+  <h1>Smart Glass Canary</h1>
+  <p class="lede">
+    An ESP32 that listens for camera-equipped smart glasses — Meta Ray-Ban,
+    Oakley Meta, Snap Spectacles and similar — and raises an alert when a likely
+    pair comes into Bluetooth LE range. It signals on the onboard LED, on an
+    optional buzzer, and over MQTT.
+  </p>
+  <p>
+    This page flashes the firmware onto a board over USB and then sets up Wi-Fi,
+    with no toolchain to install and no files to edit.
+  </p>
+
+  <div class="note">
+    <p><strong>Before you start: this needs Chrome or Edge on a desktop computer.</strong></p>
+    <p>
+      Flashing uses WebSerial, which only those browsers implement. Firefox and
+      Safari cannot do it, and neither can any browser on a phone or tablet —
+      including Chrome on Android and iOS. If you are reading this on a phone,
+      come back on a computer.
+    </p>
+    <table>
+      <tr><th scope="row">Chrome, Edge — desktop</th><td>Works</td></tr>
+      <tr><th scope="row">Firefox, Safari</th><td>No WebSerial</td></tr>
+      <tr><th scope="row">Any phone or tablet</th><td>No WebSerial</td></tr>
+    </table>
+  </div>
+
+  <h2>Install</h2>
+
+  <ol>
+    <li>
+      Plug the ESP32 into your computer with a USB <strong>data</strong> cable.
+      Charge-only cables power the board but carry no data, and the board looks
+      identical either way — this cost us an afternoon during development. If no
+      port appears in the browser dialog, suspect the cable first.
+    </li>
+    <li>Click Install below and pick the serial port for the board.</li>
+    <li>
+      When flashing finishes, the same page asks for your Wi-Fi name and
+      password.
+    </li>
+  </ol>
+
+  <div class="installer">
+    <esp-web-install-button manifest="manifest.json">
+      <button class="install" slot="activate">Install firmware</button>
+      <span class="fallback" slot="unsupported">
+        This browser cannot flash the device. Open this page in Chrome or Edge
+        on a desktop computer.
+      </span>
+      <span class="fallback" slot="not-allowed">
+        Flashing needs an HTTPS connection. Open this page over HTTPS.
+      </span>
+    </esp-web-install-button>
+  </div>
+
+  <p>
+    Wi-Fi credentials travel down the same USB serial link, using Improv Wi-Fi.
+    There is deliberately no setup access point to join: the device stores the
+    settings in NVS, connects, and reports its own address back. The firmware
+    image itself contains no credentials, so the same file can be handed to
+    anyone.
+  </p>
+
+  <h2>What it cannot do</h2>
+
+  <p>
+    Read this part. The failure mode here is a silent false negative, and a
+    canary that says nothing while glasses are present looks identical to one
+    working perfectly.
+  </p>
+
+  <p>
+    <strong>
+      Meta glasses stop advertising entirely once they are connected to their
+      owner's phone.
+    </strong>
+    At that point they are invisible to every Bluetooth LE scanner, not just
+    this one. So the canary reliably catches glasses powering on and pairing,
+    and goes blind during an actual recording session. That is device behaviour,
+    not a bug in this firmware, and no amount of signature tuning fixes it.
+  </p>
+
+  <p>
+    Treat a detection as good evidence. Treat silence as weak evidence — it is
+    not proof that nobody nearby is recording.
+  </p>
+
+  <p>
+    Recording indicators on these products are separate from the radio, so a
+    detection tells you glasses are <em>present</em>, never whether a camera is
+    <em>running</em>. This is an awareness tool, not a guarantee.
+  </p>
+
+  <p>Detection also degrades or fails when:</p>
+  <ul>
+    <li>
+      The product is not Bluetooth LE detectable at all. Xreal Air and One are
+      driven over USB HID and expose no Bluetooth path.
+    </li>
+    <li>
+      A firmware update changes an advertised name. Detection depends on a
+      signature table, so an unknown or updated product can go unseen.
+    </li>
+    <li>
+      You rely on range. RSSI swings with orientation, bodies and walls; the
+      default <code>-75</code> threshold is a rough proxy for "same room", not a
+      measurement.
+    </li>
+  </ul>
+
+  <h2>After setup</h2>
+
+  <p>
+    MQTT is optional. With it enabled the device publishes events to
+    <code>canary/glasses/event</code> and keeps a retained
+    <code>present</code>/<code>clear</code> value on
+    <code>canary/glasses/state</code>. Without it the device works standalone:
+    the LED and the buzzer alert on their own, and Wi-Fi is only needed for
+    timestamps and push outputs.
+  </p>
+
+  <p>
+    To clear stored Wi-Fi credentials later and return the device to setup, hold
+    the <strong>BOOT</strong> button while powering on and keep holding for about
+    three seconds. It keeps detecting glasses the whole time — only the network
+    side goes idle.
+  </p>
+
+  <footer>
+    Source, configuration reference, detection scoring and the vendor signature
+    tables:
+    <a href="https://github.com/paulloth1/esp32-smart-glass-canary">github.com/paulloth1/esp32-smart-glass-canary</a>
+  </footer>
+
+</main>
+<script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+</body>
+</html>

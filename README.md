@@ -128,11 +128,18 @@ connection used to flash the device — so a non-technical user never installs a
 toolchain or edits a file.
 
 1. Plug the canary into a computer with a USB **data** cable (charge-only
-   cables power the board but carry no data).
-2. Open the flasher page in Chrome or Edge and install the firmware.
+   cables power the board but carry no data — this cost us an hour).
+2. Open the [installer page](https://paulloth1.github.io/esp32-smart-glass-canary/)
+   in Chrome or Edge and click Install. WebSerial is Chromium-only, so Firefox,
+   Safari and phones cannot flash.
 3. The same page then asks for your Wi-Fi name and password and sends them
    down the serial link.
 4. The device saves them to NVS, connects, and reports its own address back.
+
+Flashing **erases stored Wi-Fi credentials**: the distributed image spans
+`0x0`–`0x13a990`, which covers the NVS region at `0x9000`. So every update also
+means re-provisioning — a few seconds in the same browser flow, and it does
+guarantee the settings match the firmware that is running.
 
 Settings live in NVS, not in the binary. That is the point: **a firmware image
 built this way contains no credentials**, so the same file can be handed to

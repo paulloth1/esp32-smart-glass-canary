@@ -1,0 +1,123 @@
+name: Publish installer site
+
+# Publishes docs/ to GitHub Pages as the web installer (ESP Web Tools style).
+#
+# The page needs three things served side by side:
+#   docs/index.html     -- the flasher page               (in the repo)
+#   docs/manifest.json  -- ESP Web Tools manifest         (in the repo)
+#   the firmware image  -- named by manifest.json         (NOT in the repo)
+# The image is a Release asset produced by release.yml (as merged.bin), and
+# .gitignore excludes *.bin, so it never reaches the Pages checkout. The step
+# below fetches it and installs it under whatever filename manifest.json
+# actually asks for -- today docs/canary-merged.bin.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "docs/**"
+      # Re-publish when this workflow itself changes.
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+# Least privilege: read the repo (and its Releases), write only Pages.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never let two deploys race; let an in-flight one finish rather than
+# cancelling it half-published.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build and deploy Pages
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ---------------------------------------------------------------
+      # Fetch the firmware image the installer page serves.
+      #
+      # The image lives on the latest GitHub Release (built by release.yml
+      # and attached there as merged.bin), not in git. `gh release download`
+      # is used rather than a marketplace action because gh is preinstalled
+      # on the runner and needs nothing beyond the default GITHUB_TOKEN's
+      # `contents: read`.
+      #
+      # The destination filename is read out of docs/manifest.json rather
+      # than hard-coded, so renaming the asset in the manifest does not
+      # quietly produce a 404 here. (It is currently canary-merged.bin,
+      # while the release asset is merged.bin -- hence the copy.)
+      #
+      # This step FAILS the deploy if no image can be fetched, on purpose:
+      # publishing a flasher page whose binary 404s looks like working
+      # software and wastes the user's time at the point of flashing.
+      # ---------------------------------------------------------------
+      - name: Download the firmware image from the latest release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          for f in docs/index.html docs/manifest.json; do
+            if [ ! -f "$f" ]; then
+              echo "::error file=$f::$f is missing -- the published site would have no working installer."
+              exit 1
+            fi
+          done
+
+          # Every part path the manifest references (ESP Web Tools serves
+          # these relative to index.html).
+          PART_PATHS=$(jq -r '.builds[].parts[].path' docs/manifest.json)
+          echo "manifest.json expects: $PART_PATHS"
+
+          if ! gh release view --json tagName --jq .tagName > /dev/null 2>&1; then
+            echo "::error::No GitHub Release found. Push a v* tag first so release.yml can build and attach merged.bin, then re-run this workflow."
+            exit 1
+          fi
+
+          TAG=$(gh release view --json tagName --jq .tagName)
+          echo "Latest release: $TAG"
+
+          mkdir -p .release-assets
+          # --clobber so a re-run overwrites any stale copy.
+          gh release download "$TAG" \
+            --pattern merged.bin \
+            --dir .release-assets \
+            --clobber
+
+          # Install it under each name the manifest asks for.
+          for p in $PART_PATHS; do
+            install -D -m 644 .release-assets/merged.bin "docs/$p"
+            echo "placed docs/$p"
+          done
+          rm -rf .release-assets
+
+          ls -l docs
+
+      # NOTE (maintainer): Pages must be enabled for this repo with
+      # "Source: GitHub Actions" (Settings -> Pages), or actions/deploy-pages
+      # fails with a 404 on the deployment API. That is a one-time click and
+      # cannot be done from a workflow.
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
