@@ -481,6 +481,11 @@ static void wifiEnsure() {
 // Note the broker must advertise itself: mosquitto does not do this on its own,
 // so it needs an Avahi service file (see docs/signage-integration.md). If
 // nothing advertises, discovery quietly finds nothing and MQTT stays off.
+// Distinguishes a host we found from one the user set. A configured host is
+// authoritative and must never be discarded; a discovered one is only a guess
+// and has to be re-checked, or a broker that moves strands the device forever.
+static bool g_mqttHostDiscovered = false;
+
 static bool mqttDiscover() {
   int n = MDNS.queryService("mqtt", "tcp");
   if (n <= 0) return false;
@@ -493,6 +498,7 @@ static bool mqttDiscover() {
   cfgCopy(g_cfg.mqttHost, sizeof(g_cfg.mqttHost), ip.toString().c_str());
   g_cfg.mqttPort = port;
 
+  g_mqttHostDiscovered = true;
   Serial.printf("{\"event\":\"mqtt_discovered\",\"host\":\"%s\",\"port\":%u,"
                 "\"candidates\":%d}\n", g_cfg.mqttHost, g_cfg.mqttPort, n);
   return true;
@@ -520,6 +526,22 @@ static void mqttEnsure() {
   const char* pass = (g_cfg.mqttPass[0] != '\0') ? g_cfg.mqttPass : nullptr;
   bool ok = g_mqtt.connect(MQTT_CLIENT_ID, user, pass,
                            MQTT_TOPIC_AVAIL, 0, true, "offline");
+
+  // A discovered address is a guess, so give up on it after a few failures and
+  // look again. Without this, a broker that changes address or goes away leaves
+  // the device retrying a dead host indefinitely.
+  static uint8_t discoveredFailures = 0;
+  if (!ok && g_mqttHostDiscovered) {
+    if (++discoveredFailures >= 3) {
+      Serial.printf("{\"event\":\"mqtt_rediscover\",\"dropped\":\"%s\"}\n", g_cfg.mqttHost);
+      g_cfg.mqttHost[0] = '\0';
+      g_mqttHostDiscovered = false;
+      discoveredFailures = 0;
+    }
+  } else if (ok) {
+    discoveredFailures = 0;
+  }
+
   if (ok) {
     g_mqtt.publish(MQTT_TOPIC_AVAIL, "online", true);
     // Re-assert current state on every reconnect rather than assuming clear:
