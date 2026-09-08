@@ -167,6 +167,17 @@ Both wipe stored settings and leave the device waiting for Improv. It keeps
 detecting glasses and driving the LED and buzzer the whole time — only the
 network side is idle.
 
+### Finding a broker without configuring one
+
+Improv carries only Wi-Fi credentials, so a device flashed from the installer
+has no broker address. When `MQTT_HOST` is empty the firmware discovers a
+broker advertised on the LAN as `_mqtt._tcp`, retrying every 60 seconds. A
+configured host always wins.
+
+Mosquitto does not advertise itself — that needs a small Avahi service file on
+the broker host, and the caveats (first responder wins, mDNS is
+unauthenticated) are in [docs/signage-integration.md](docs/signage-integration.md).
+
 ### Security trade-offs, stated plainly
 
 - **NVS is not encrypted.** Someone with physical access to the board can read

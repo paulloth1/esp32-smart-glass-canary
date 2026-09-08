@@ -113,6 +113,53 @@ allow_anonymous true
 
 Then use MQTT.js against `ws://BROKER_IP:9001`.
 
+
+## Letting the canary find your broker
+
+A device flashed from the browser installer has no broker address: Improv
+carries only Wi-Fi credentials, and the device page is read-only. So when
+`MQTT_HOST` is empty the firmware looks for a broker advertised on the LAN as
+`_mqtt._tcp` and uses the first one that answers, retrying every 60 seconds
+until it finds one.
+
+**Mosquitto does not advertise itself.** Nothing happens until you tell Avahi
+to announce it. On the broker host, create
+`/etc/avahi/services/mqtt.service`:
+
+```xml
+<?xml version="1.0" standalone='no'?>
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<service-group>
+  <name replace-wildcards="yes">MQTT on %h</name>
+  <service>
+    <type>_mqtt._tcp</type>
+    <port>1883</port>
+  </service>
+</service-group>
+```
+
+Then `sudo systemctl restart avahi-daemon`. Check it from another machine with:
+
+```bash
+avahi-browse -tr _mqtt._tcp
+```
+
+A configured `MQTT_HOST` always wins; discovery only fills the gap when none is
+set. The address is held in RAM rather than saved, so a broker that moves is
+picked up again on the next boot instead of leaving a stale address behind.
+
+### Worth knowing
+
+- **First responder wins.** With more than one broker advertising, the choice is
+  arbitrary — there is no signal to rank them by. Set `MQTT_HOST` explicitly if
+  that matters.
+- **Anything on the LAN can claim to be the broker.** mDNS is unauthenticated,
+  so a device that trusts discovery will publish detection events to whoever
+  answers first. On a home network that is usually fine; on a shared or
+  untrusted one, configure the broker explicitly instead.
+- Verified end to end: with `MQTT_HOST` blank, an advertised broker was found
+  and connected to without any configuration on the device.
+
 ## Things worth knowing
 
 - **QoS 0** — events are fire-and-forget and can be lost on a flaky link. The

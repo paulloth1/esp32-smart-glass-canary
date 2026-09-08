@@ -34,6 +34,7 @@
 #if WIFI_ENABLED
   #include <WiFi.h>
   #include <ImprovWiFiLibrary.h>
+  #include <ESPmDNS.h>
   #include "provisioning.h"
   #if WEBHOOK_ENABLED
     #include <HTTPClient.h>
@@ -472,8 +473,40 @@ static void wifiEnsure() {
 #endif
 
 #if WIFI_ENABLED && MQTT_ENABLED
+// Find a broker on the LAN when none is configured. Improv carries only Wi-Fi
+// credentials, and the device page is read-only, so without this a device
+// flashed from the web installer could never reach MQTT at all -- the feature
+// would only work for people who build from source with their own secrets.h.
+//
+// Note the broker must advertise itself: mosquitto does not do this on its own,
+// so it needs an Avahi service file (see docs/signage-integration.md). If
+// nothing advertises, discovery quietly finds nothing and MQTT stays off.
+static bool mqttDiscover() {
+  int n = MDNS.queryService("mqtt", "tcp");
+  if (n <= 0) return false;
+
+  // First responder wins. Ranking them would need a signal we do not have.
+  IPAddress ip = MDNS.address(0);
+  uint16_t   port = MDNS.port(0);
+  if (ip == IPAddress((uint32_t)0) || port == 0) return false;
+
+  cfgCopy(g_cfg.mqttHost, sizeof(g_cfg.mqttHost), ip.toString().c_str());
+  g_cfg.mqttPort = port;
+
+  Serial.printf("{\"event\":\"mqtt_discovered\",\"host\":\"%s\",\"port\":%u,"
+                "\"candidates\":%d}\n", g_cfg.mqttHost, g_cfg.mqttPort, n);
+  return true;
+}
+
 static void mqttEnsure() {
-  if (g_cfg.mqttHost[0] == '\0') return;   // no broker configured
+  if (g_cfg.mqttHost[0] == '\0') {
+    // Nothing configured -- look for one, but not on every loop iteration.
+    static uint32_t lastDiscover = 0;
+    uint32_t now = millis();
+    if (lastDiscover && now - lastDiscover < 60000UL) return;
+    lastDiscover = now;
+    if (!mqttDiscover()) return;
+  }
   if (WiFi.status() != WL_CONNECTED || g_mqtt.connected()) return;
   static uint32_t lastTry = 0;
   uint32_t now = millis();
