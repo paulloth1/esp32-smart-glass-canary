@@ -533,6 +533,10 @@ static void publishState(const char* state) {
 
 // ------------------------------------------------------------- tracking
 
+#if WIFI_ENABLED
+  #include "webui.h"
+#endif
+
 static Track* findTrack(const char* addr) {
   for (int i = 0; i < MAX_TRACKED; ++i)
     if (g_track[i].used && strcmp(g_track[i].addr, addr) == 0) return &g_track[i];
@@ -586,6 +590,10 @@ static void raiseAlert(Track* t, const char* why) {
   char text[128];
   snprintf(text, sizeof(text), "Glasses detected: %s (%d dBm)",
            t->vendor ? t->vendor : "unknown", t->lastRssi);
+
+#if WIFI_ENABLED
+  weblogAdd(ts, t->vendor ? t->vendor : "unknown", t->lastRssi, t->score);
+#endif
 
   Serial.println(json);
   fireIndicators();
@@ -843,6 +851,10 @@ void loop() {
 
 #if WIFI_ENABLED
   wifiEnsure();
+  // Serve the status page only while actually on the network. Driven here
+  // rather than inside wifiEnsure() so it sits after webui.h is included.
+  if (WiFi.status() == WL_CONNECTED) webStart(); else webStop();
+  webService();
   timeEnsure();
   #if MQTT_ENABLED
     mqttEnsure();
