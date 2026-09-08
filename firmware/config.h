@@ -87,6 +87,27 @@
 #define BUZZER_FREQ_HZ       2400
 #define BUZZER_BEEPS            3
 
+// ----------------------------------------------------------- provisioning
+
+// When the device has no stored Wi-Fi credentials it raises its own access
+// point and serves a setup page, so a non-technical user never has to edit a
+// file or install a toolchain. Credentials entered there are kept in NVS,
+// which means a distributable firmware image contains no secrets at all.
+#define AP_SSID                "Glass-Canary-Setup"
+
+// Password for the setup access point. Empty means an open network, which is
+// far easier for a non-technical user but does mean anyone in range during
+// setup could configure the device. The window is small and the device
+// controls nothing dangerous, so open is the default; set a password here if
+// you would rather trade convenience for that.
+#define AP_PASSWORD            ""
+
+// Hold the BOOT button (GPIO0) down while powering on for this long to erase
+// stored credentials and return to setup. This is the recovery path when the
+// Wi-Fi password changes or the device moves house.
+#define PIN_FACTORY_RESET       0
+#define FACTORY_RESET_HOLD_MS 3000UL
+
 // -------------------------------------------------------------------- wifi
 
 // Leave this at 0 until you have filled in real credentials below AND
@@ -96,6 +117,12 @@
 // WiFi.begin() while WIFI_SSID is still the placeholder, as a backstop.
 #define WIFI_ENABLED            1
 #define WIFI_CONNECT_TIMEOUT_MS 15000UL
+
+// If a configured network cannot be joined within this long after boot, raise
+// the setup portal again. This is the path back when the Wi-Fi password
+// changes or the device is moved somewhere new -- without it, a device with
+// stale credentials would retry a network that no longer exists forever.
+#define WIFI_FALLBACK_MS      120000UL
 
 // ----------------------------------------------------------------- webhook
 

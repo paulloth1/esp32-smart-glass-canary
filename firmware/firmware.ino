@@ -33,6 +33,7 @@
 
 #if WIFI_ENABLED
   #include <WiFi.h>
+  #include "provisioning.h"
   #if WEBHOOK_ENABLED
     #include <HTTPClient.h>
   #endif
@@ -398,43 +399,51 @@ static void isoNow(char* buf, size_t n) {
 #if WIFI_ENABLED
 static void wifiEnsure() {
   static uint32_t lastTry = 0;
-  if (WiFi.status() == WL_CONNECTED) return;
-  // Backstop against the most common misconfiguration: Wi-Fi switched on but
-  // credentials never filled in. Retrying a placeholder SSID achieves nothing
-  // and buries the useful output in driver errors.
-  if (strcmp(WIFI_SSID, "YOUR_SSID") == 0 || strcmp(WIFI_PASS, "YOUR_PASSWORD") == 0) {
-    static bool warned = false;
-    if (!warned) {
-      warned = true;
-      Serial.println("{\"event\":\"wifi\",\"state\":\"disabled\","
-                     "\"reason\":\"WIFI_SSID/WIFI_PASS still placeholder in secrets.h\"}");
-    }
+  uint32_t now = millis();
+
+  if (WiFi.status() == WL_CONNECTED) {
+    if (portalActive()) portalStop();     // on the real network; drop the AP
     return;
   }
 
-  uint32_t now = millis();
+  // Nothing stored to connect to: the portal is the whole user interface.
+  if (!cfgConfigured()) {
+    portalStart();
+    return;
+  }
+
+  // Configured but unreachable for too long -- offer setup again rather than
+  // retrying a network that may no longer exist.
+  if (!portalActive() && now > WIFI_FALLBACK_MS) {
+    Serial.println("{\"event\":\"wifi\",\"state\":\"unreachable\","
+                   "\"action\":\"reopening setup portal\"}");
+    portalStart();
+  }
+
   if (lastTry && now - lastTry < 30000UL) return;
   lastTry = now;
-  Serial.println("{\"event\":\"wifi\",\"state\":\"connecting\"}");
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
+
+  Serial.printf("{\"event\":\"wifi\",\"state\":\"connecting\",\"ssid\":\"%s\"}\n",
+                g_cfg.wifiSsid);
+  WiFi.mode(portalActive() ? WIFI_AP_STA : WIFI_STA);
+  WiFi.begin(g_cfg.wifiSsid, g_cfg.wifiPass);
 }
 #endif
 
 #if WIFI_ENABLED && MQTT_ENABLED
 static void mqttEnsure() {
-  if (MQTT_HOST[0] == '\0') return;   // broker address not configured yet
+  if (g_cfg.mqttHost[0] == '\0') return;   // no broker configured
   if (WiFi.status() != WL_CONNECTED || g_mqtt.connected()) return;
   static uint32_t lastTry = 0;
   uint32_t now = millis();
   if (lastTry && now - lastTry < 10000UL) return;
   lastTry = now;
-  g_mqtt.setServer(MQTT_HOST, MQTT_PORT);
+  g_mqtt.setServer(g_cfg.mqttHost, g_cfg.mqttPort);
 
   // Register "offline" as the Last Will before anything else, so the broker
   // publishes it on our behalf if this device drops off ungracefully.
-  const char* user = (strlen(MQTT_USER) > 0) ? MQTT_USER : nullptr;
-  const char* pass = (strlen(MQTT_PASS) > 0) ? MQTT_PASS : nullptr;
+  const char* user = (g_cfg.mqttUser[0] != '\0') ? g_cfg.mqttUser : nullptr;
+  const char* pass = (g_cfg.mqttPass[0] != '\0') ? g_cfg.mqttPass : nullptr;
   bool ok = g_mqtt.connect(MQTT_CLIENT_ID, user, pass,
                            MQTT_TOPIC_AVAIL, 0, true, "offline");
   if (ok) {
@@ -649,9 +658,10 @@ static void printStatus() {
                 (unsigned long)g_scanRestarts,
                 (unsigned long)(millis() - g_lastAdvMs), statusTs);
 #if WIFI_ENABLED
-  Serial.printf(",\"wifi\":\"%s\",\"ip\":\"%s\"",
+  Serial.printf(",\"wifi\":\"%s\",\"ip\":\"%s\",\"provisioned\":%d,\"portal\":%d",
                 WiFi.status() == WL_CONNECTED ? "up" : "down",
-                WiFi.localIP().toString().c_str());
+                WiFi.localIP().toString().c_str(),
+                cfgConfigured() ? 1 : 0, portalActive() ? 1 : 0);
 #endif
   Serial.println("}");
 }
@@ -678,6 +688,16 @@ static void handleSerial() {
       }
       break;
     case 'l': ledSelfTest(); break;
+#if WIFI_ENABLED
+    case 'p':
+      // Wipe credentials and restart, which brings the setup portal back.
+      // The hardware equivalent is holding BOOT while powering on.
+      Serial.println("{\"event\":\"reprovision\",\"action\":\"clearing credentials\"}");
+      cfgClear();
+      delay(300);
+      ESP.restart();
+      break;
+#endif
     case 'x':
       // Fault injection: kill the scan without restarting it, to prove the
       // watchdog actually recovers. NimBLE's stop() does not raise onScanEnd,
@@ -693,7 +713,7 @@ static void handleSerial() {
                    "Canary test alert");
       break;
     case 'h':
-      Serial.println("{\"event\":\"help\",\"keys\":\"s=status d=dump v=verbose l=led-test t=test-alert x=kill-scan h=help\"}");
+      Serial.println("{\"event\":\"help\",\"keys\":\"s=status d=dump v=verbose l=led-test t=test-alert x=kill-scan p=reprovision h=help\"}");
       break;
     default: break;
   }
@@ -724,10 +744,12 @@ void setup() {
                 "\"threshold\":%d,\"rssi_gate\":%d}\n",
                 FW_VERSION, ENABLE_BROAD_VENDORS,
                 ALERT_SCORE_THRESHOLD, RSSI_ALERT_THRESHOLD);
-  Serial.println("{\"event\":\"help\",\"keys\":\"s=status d=dump v=verbose l=led-test t=test-alert x=kill-scan h=help\"}");
+  Serial.println("{\"event\":\"help\",\"keys\":\"s=status d=dump v=verbose l=led-test t=test-alert x=kill-scan p=reprovision h=help\"}");
 
 #if WIFI_ENABLED
-  wifiEnsure();
+  checkFactoryReset();   // BOOT held at power-on wipes stored credentials
+  cfgLoad();             // NVS, falling back to secrets.h defaults
+  wifiEnsure();          // raises the setup portal if nothing is stored
 #endif
 
   NimBLEDevice::init("");
@@ -757,6 +779,7 @@ void loop() {
 
 #if WIFI_ENABLED
   wifiEnsure();
+  portalService();
   timeEnsure();
   #if MQTT_ENABLED
     mqttEnsure();
