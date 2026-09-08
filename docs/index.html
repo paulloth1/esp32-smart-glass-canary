@@ -41,12 +41,10 @@
     border-radius:7px; padding:.9rem 1.1rem; margin:0 0 2rem; font-size:.925rem;
   }
   .note b{font-weight:600}
-  details{border-top:1px solid var(--line); padding:.85rem 0}
-  summary{cursor:pointer; font-weight:500; list-style:none}
-  summary::-webkit-details-marker{display:none}
-  summary::before{content:"+ "; color:var(--muted)}
-  details[open] summary::before{content:"\2212 "}
-  details p{margin:.7rem 0 .2rem; color:var(--muted); font-size:.925rem}
+  .already{border-top:1px solid var(--line); padding-top:1.25rem}
+  .already h2{font-size:1rem; margin:0 0 .5rem}
+  .already p{margin:.35rem 0; color:var(--muted); font-size:.925rem}
+  .already a{font-weight:500}
   footer{
     border-top:1px solid var(--line); margin-top:1.5rem; padding-top:1.25rem;
     color:var(--muted); font-size:.875rem;
@@ -81,20 +79,14 @@
     doesn't mean nobody is recording.
   </p>
 
-  <details>
-    <summary>Charge-only cables</summary>
-    <p>Many USB cables carry power but no data. The board will light up and
-    still not appear to your computer. If Install can't find a device, try a
-    different cable first.</p>
-  </details>
-
-  <details>
-    <summary>Wi-Fi and MQTT</summary>
-    <p>Wi-Fi is set up over the USB connection, so there's no network to join.
-    Credentials are stored on the device, not built into the firmware.</p>
-    <p>MQTT is optional. Without it the canary still blinks and beeps on its
-    own. With it, it publishes to <code>canary/glasses/*</code>.</p>
-  </details>
+  <div class="already">
+    <h2>Already installed?</h2>
+    <p>You don't need to reflash to check on a device that's already running.</p>
+    <p><a href="http://canary.local/">Open the device page</a> &mdash; live status and
+    recent detections, on your own network.</p>
+    <p>Clicking Install on a flashed device also offers <b>Logs &amp; Console</b> and
+    <b>Change Wi-Fi</b> without reinstalling.</p>
+  </div>
 
   <footer>
     Open source —

@@ -15,6 +15,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WebServer.h>
+#include <ESPmDNS.h>
 
 #define WEBUI_LOG_SIZE 20
 
@@ -161,19 +162,32 @@ static void webHandleStatus() {
   g_web.send(200, "application/json", j);
 }
 
+#define WEBUI_HOSTNAME "canary"
+
 static void webStart() {
   if (g_webUp) return;
   g_web.on("/", webHandleRoot);
   g_web.on("/api/status", webHandleStatus);
   g_web.onNotFound([]() { g_web.send(404, "text/plain", "Not found"); });
   g_web.begin();
+
+  // Advertise over mDNS so the device is reachable by name. Without it the
+  // only way back to this page is knowing the IP the router happened to hand
+  // out, which is exactly the friction that makes people reflash to check
+  // something they could have just looked at.
+  bool mdns = MDNS.begin(WEBUI_HOSTNAME);
+  if (mdns) MDNS.addService("http", "tcp", 80);
+
   g_webUp = true;
-  Serial.printf("{\"event\":\"webui\",\"state\":\"listening\",\"url\":\"http://%s/\"}\n",
-                WiFi.localIP().toString().c_str());
+  Serial.printf("{\"event\":\"webui\",\"state\":\"listening\",\"url\":\"http://%s/\","
+                "\"mdns\":\"%s\"}\n",
+                WiFi.localIP().toString().c_str(),
+                mdns ? "http://" WEBUI_HOSTNAME ".local/" : "unavailable");
 }
 
 static void webStop() {
   if (!g_webUp) return;
+  MDNS.end();
   g_web.stop();
   g_webUp = false;
 }
