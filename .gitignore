@@ -1,0 +1,8 @@
+# Credentials -- never commit. Use secrets.h.example as the template.
+firmware/secrets.h
+
+# Arduino build output
+build/
+*.bin
+*.elf
+*.map
