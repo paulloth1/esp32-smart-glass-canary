@@ -121,6 +121,53 @@ This needs Wi-Fi. Before NTP has synced — and always when `WIFI_ENABLED` is
 That is deliberate: a wrong timestamp on a detection is worse than no
 timestamp. A successful sync logs `{"event":"time_sync","time":"..."}` once.
 
+## Setting it up without a toolchain
+
+A device with no stored Wi-Fi credentials raises its own access point and
+serves a setup page, so a non-technical user never has to install anything or
+edit a file.
+
+1. Power the canary from any USB supply.
+2. On a phone or laptop, join the Wi-Fi network **`Glass-Canary-Setup`**.
+3. The setup page opens by itself. (If it does not, browse to
+   `http://192.168.4.1/`.)
+4. Pick your Wi-Fi network, enter its password, and save. MQTT settings are
+   optional and live under Advanced — a canary that only blinks and beeps
+   needs nothing there.
+5. The device restarts and joins your network. The setup access point
+   disappears once it succeeds.
+
+Settings are stored in NVS, not compiled in. That is the point: **a firmware
+image built this way contains no credentials**, so the same binary can be
+handed to anyone. `secrets.h` still works and acts as the default when NVS is
+empty, so the build-and-flash workflow above is unchanged for you.
+
+### Getting back to setup
+
+Credentials outlive the network they were for — you change your Wi-Fi
+password, or the device moves house. Three ways back:
+
+| Route | How |
+|---|---|
+| Hardware | Hold **BOOT** while powering on, keep holding ~3s |
+| Serial | Press `p` in `./monitor.sh` |
+| Automatic | If a configured network stays unreachable for `WIFI_FALLBACK_MS` (default 2 min) the setup portal reappears on its own |
+
+The automatic path measures from when the link was *lost*, not from boot —
+otherwise any brief outage on a long-running device would drop it into setup
+mode instead of letting it reconnect.
+
+### Security trade-offs, stated plainly
+
+- **The setup access point is open by default.** Anyone in range during setup
+  could configure the device. The window is short and the canary controls
+  nothing dangerous, so this is the default in exchange for the setup being
+  usable by someone non-technical. Set `AP_PASSWORD` in `config.h` if you would
+  rather trade that convenience away.
+- **NVS is not encrypted.** Someone with physical access to the board can read
+  the stored Wi-Fi password out of flash. This is normal for consumer IoT and
+  worth knowing rather than discovering.
+
 ## How detection works
 
 Detection is **scored, not binary**. Each signal in an advertisement adds

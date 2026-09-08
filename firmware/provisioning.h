@@ -80,8 +80,28 @@ static void cfgLoad() {
 static void cfgClear() {
   g_prefs.begin("canary", false);
   g_prefs.clear();
+  // Store an explicit empty SSID rather than leaving the key absent. With no
+  // key, cfgLoad() falls back to the compile-time secrets.h default and the
+  // device comes straight back up "configured" -- which silently defeats both
+  // the serial reprovision and the BOOT-button factory reset on any build that
+  // has real credentials compiled in. An empty stored value overrides the
+  // default and genuinely returns the device to setup.
+  g_prefs.putString("ssid", "");
   g_prefs.end();
   Serial.println("{\"event\":\"config\",\"action\":\"cleared\"}");
+}
+
+// Persist credentials handed to us out-of-band (Improv over serial), so they
+// survive a reboot the same way portal-entered ones do.
+static void cfgSaveWifi(const char* ssid, const char* pass) {
+  g_prefs.begin("canary", false);
+  g_prefs.putString("ssid", ssid ? ssid : "");
+  g_prefs.putString("pass", pass ? pass : "");
+  g_prefs.end();
+  cfgCopy(g_cfg.wifiSsid, sizeof(g_cfg.wifiSsid), ssid);
+  cfgCopy(g_cfg.wifiPass, sizeof(g_cfg.wifiPass), pass);
+  Serial.printf("{\"event\":\"config\",\"action\":\"saved\",\"source\":\"improv\","
+                "\"ssid\":\"%s\"}\n", g_cfg.wifiSsid);
 }
 
 // ------------------------------------------------------------ scanning
@@ -163,7 +183,7 @@ static void portalHandleSave() {
 // Captive-portal detection probes from iOS, Android and Windows. Answering
 // them with a redirect is what makes the setup page pop up on its own.
 static void portalHandleNotFound() {
-  g_portalServer.sendHeader("Location", "http://4.3.2.1/", true);
+  g_portalServer.sendHeader("Location", "http://192.168.4.1/", true);
   g_portalServer.send(302, "text/plain", "");
 }
 
@@ -173,7 +193,11 @@ static void portalStart() {
   if (g_portalUp) return;
 
   WiFi.mode(WIFI_AP_STA);            // AP for setup, STA so we can scan
-  IPAddress apIp(4, 3, 2, 1);        // memorable, and not a common LAN range
+  // 192.168.4.1 is the ESP32 SoftAP convention, used by ESPHome, WLED and
+  // WiFiManager alike. It matters: a clever-looking address outside RFC1918
+  // is real routable space, and clients can associate but then refuse the
+  // DHCP lease or drop the link rather than accept a public gateway.
+  IPAddress apIp(192, 168, 4, 1);
   WiFi.softAPConfig(apIp, apIp, IPAddress(255, 255, 255, 0));
   if (strlen(AP_PASSWORD) >= 8) WiFi.softAP(AP_SSID, AP_PASSWORD);
   else                          WiFi.softAP(AP_SSID);
@@ -190,7 +214,7 @@ static void portalStart() {
   g_portalServer.begin();
 
   g_portalUp = true;
-  Serial.printf("{\"event\":\"portal_open\",\"ap\":\"%s\",\"open\":%d,\"url\":\"http://4.3.2.1/\"}\n",
+  Serial.printf("{\"event\":\"portal_open\",\"ap\":\"%s\",\"open\":%d,\"url\":\"http://192.168.4.1/\"}\n",
                 AP_SSID, strlen(AP_PASSWORD) >= 8 ? 0 : 1);
 }
 

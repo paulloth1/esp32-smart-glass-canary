@@ -33,6 +33,7 @@
 
 #if WIFI_ENABLED
   #include <WiFi.h>
+  #include <ImprovWiFiLibrary.h>
   #include "provisioning.h"
   #if WEBHOOK_ENABLED
     #include <HTTPClient.h>
@@ -270,10 +271,79 @@ class ScanCB : public NimBLEScanCallbacks {
 
 static ScanCB g_scanCb;
 
+// The ESP32 shares one 2.4GHz radio between Wi-Fi and Bluetooth. A BLE scan at
+// full duty cycle coexists acceptably with Wi-Fi station mode, but it starves a
+// SoftAP: beacons still go out, so the setup network is visible, while clients
+// cannot win enough airtime to complete association and DHCP. Setup is brief and
+// detection is not the priority during it, so the scan pauses while the portal
+// is open and resumes the moment it closes.
+static bool g_blePausedForPortal = false;
+
+#if WIFI_ENABLED
+// Improv Wi-Fi over serial: the browser that just flashed the device hands it
+// credentials down the same USB connection. No access point, no captive portal,
+// and none of the radio contention that comes with them.
+static ImprovWiFi g_improv(&Serial);
+
+// Credentials arrive here. Persist them first -- the library only connects,
+// it does not remember, and a reboot would otherwise lose them.
+static bool improvConnect(const char* ssid, const char* password) {
+  Serial.printf("{\"event\":\"improv\",\"state\":\"connecting\",\"ssid\":\"%s\"}\n", ssid);
+  cfgSaveWifi(ssid, password);
+
+  // Give the radio to Wi-Fi for the handshake; a full-duty BLE scan makes
+  // association unreliable on this single-radio chip.
+  NimBLEDevice::getScan()->stop();
+
+  if (portalActive()) portalStop();
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+
+  uint32_t start = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - start < WIFI_CONNECT_TIMEOUT_MS) {
+    delay(200);
+  }
+
+  bool ok = (WiFi.status() == WL_CONNECTED);
+  NimBLEDevice::getScan()->start(0, false);
+  g_lastAdvMs = millis();
+
+  Serial.printf("{\"event\":\"improv\",\"state\":\"%s\",\"ip\":\"%s\"}\n",
+                ok ? "connected" : "failed", WiFi.localIP().toString().c_str());
+  return ok;
+}
+
+static void improvOnConnected(const char* ssid, const char* password) {
+  (void)password;
+  Serial.printf("{\"event\":\"improv\",\"state\":\"provisioned\",\"ssid\":\"%s\"}\n", ssid);
+}
+
+static void improvOnError(ImprovTypes::Error err) {
+  Serial.printf("{\"event\":\"improv\",\"state\":\"error\",\"code\":%d}\n", (int)err);
+}
+#endif
+
+static void serviceRadioCoexistence() {
+  bool portal = portalActive();
+  if (portal && !g_blePausedForPortal) {
+    NimBLEDevice::getScan()->stop();
+    g_blePausedForPortal = true;
+    Serial.println("{\"event\":\"ble_paused\",\"reason\":\"setup portal open\"}");
+  } else if (!portal && g_blePausedForPortal) {
+    NimBLEDevice::getScan()->start(0, false);
+    g_lastAdvMs = millis();
+    g_blePausedForPortal = false;
+    Serial.println("{\"event\":\"ble_resumed\"}");
+  }
+}
+
 // A stalled scan is this project's worst failure: everything looks healthy
 // while the device is deaf. Restart on either signal - an explicit scan end,
 // or a suspicious silence.
 static void serviceScanWatchdog() {
+  // Silence is expected while the scan is intentionally paused for setup.
+  if (g_blePausedForPortal) return;
+
   uint32_t now = millis();
 
   // Clear the flag as soon as we have read it, to narrow the window in which
@@ -398,10 +468,12 @@ static void isoNow(char* buf, size_t n) {
 
 #if WIFI_ENABLED
 static void wifiEnsure() {
-  static uint32_t lastTry = 0;
+  static uint32_t lastTry   = 0;
+  static uint32_t downSince = 0;   // 0 = currently connected / never lost
   uint32_t now = millis();
 
   if (WiFi.status() == WL_CONNECTED) {
+    downSince = 0;
     if (portalActive()) portalStop();     // on the real network; drop the AP
     return;
   }
@@ -412,9 +484,15 @@ static void wifiEnsure() {
     return;
   }
 
+  // Measure from when the link was actually lost, not from boot. Testing
+  // uptime instead would raise the setup AP on any brief outage once the
+  // device had been up a while -- a router reboot would knock an unattended
+  // canary into setup mode instead of letting it quietly reconnect.
+  if (!downSince) downSince = now ? now : 1;
+
   // Configured but unreachable for too long -- offer setup again rather than
   // retrying a network that may no longer exist.
-  if (!portalActive() && now > WIFI_FALLBACK_MS) {
+  if (!portalActive() && (now - downSince) > WIFI_FALLBACK_MS) {
     Serial.println("{\"event\":\"wifi\",\"state\":\"unreachable\","
                    "\"action\":\"reopening setup portal\"}");
     portalStart();
@@ -668,6 +746,20 @@ static void printStatus() {
 
 static void handleSerial() {
   if (!Serial.available()) return;
+
+#if WIFI_ENABLED
+  // Improv frames start with "IMPROV". Peek so the library still owns the
+  // whole packet, then keep feeding it: it consumes one byte per call, so a
+  // single hand-off would strand the rest of the frame and the console would
+  // eat it. The short window closes on its own once the burst ends.
+  static uint32_t improvUntil = 0;
+  if (Serial.peek() == 'I' || (int32_t)(improvUntil - millis()) > 0) {
+    for (int i = 0; i < 64 && Serial.available(); ++i) g_improv.handleSerial();
+    improvUntil = millis() + 250;
+    return;
+  }
+#endif
+
   int c = Serial.read();
   switch (c) {
     case 's': printStatus(); break;
@@ -752,6 +844,14 @@ void setup() {
   wifiEnsure();          // raises the setup portal if nothing is stored
 #endif
 
+#if WIFI_ENABLED
+  g_improv.setDeviceInfo(ImprovTypes::ChipFamily::CF_ESP32, "SmartGlassCanary",
+                         FW_VERSION, "Smart Glass Canary");
+  g_improv.setCustomConnectWiFi(improvConnect);
+  g_improv.onImprovConnected(improvOnConnected);
+  g_improv.onImprovError(improvOnError);
+#endif
+
   NimBLEDevice::init("");
   NimBLEDevice::setPower(ESP_PWR_LVL_P9);
 
@@ -780,6 +880,7 @@ void loop() {
 #if WIFI_ENABLED
   wifiEnsure();
   portalService();
+  serviceRadioCoexistence();
   timeEnsure();
   #if MQTT_ENABLED
     mqttEnsure();

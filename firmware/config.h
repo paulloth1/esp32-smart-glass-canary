@@ -118,8 +118,8 @@
 #define WIFI_ENABLED            1
 #define WIFI_CONNECT_TIMEOUT_MS 15000UL
 
-// If a configured network cannot be joined within this long after boot, raise
-// the setup portal again. This is the path back when the Wi-Fi password
+// If a configured network stays unreachable for this long -- measured from
+// when the link was lost, not from boot -- raise the setup portal again. This is the path back when the Wi-Fi password
 // changes or the device is moved somewhere new -- without it, a device with
 // stale credentials would retry a network that no longer exists forever.
 #define WIFI_FALLBACK_MS      120000UL
