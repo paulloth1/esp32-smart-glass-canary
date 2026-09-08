@@ -123,50 +123,50 @@ timestamp. A successful sync logs `{"event":"time_sync","time":"..."}` once.
 
 ## Setting it up without a toolchain
 
-A device with no stored Wi-Fi credentials raises its own access point and
-serves a setup page, so a non-technical user never has to install anything or
-edit a file.
+Wi-Fi settings arrive over **Improv Wi-Fi** on the USB serial link — the same
+connection used to flash the device — so a non-technical user never installs a
+toolchain or edits a file.
 
-1. Power the canary from any USB supply.
-2. On a phone or laptop, join the Wi-Fi network **`Glass-Canary-Setup`**.
-3. The setup page opens by itself. (If it does not, browse to
-   `http://192.168.4.1/`.)
-4. Pick your Wi-Fi network, enter its password, and save. MQTT settings are
-   optional and live under Advanced — a canary that only blinks and beeps
-   needs nothing there.
-5. The device restarts and joins your network. The setup access point
-   disappears once it succeeds.
+1. Plug the canary into a computer with a USB **data** cable (charge-only
+   cables power the board but carry no data).
+2. Open the flasher page in Chrome or Edge and install the firmware.
+3. The same page then asks for your Wi-Fi name and password and sends them
+   down the serial link.
+4. The device saves them to NVS, connects, and reports its own address back.
 
-Settings are stored in NVS, not compiled in. That is the point: **a firmware
-image built this way contains no credentials**, so the same binary can be
-handed to anyone. `secrets.h` still works and acts as the default when NVS is
-empty, so the build-and-flash workflow above is unchanged for you.
+Settings live in NVS, not in the binary. That is the point: **a firmware image
+built this way contains no credentials**, so the same file can be handed to
+anyone. `secrets.h` still works and acts as the default when NVS is empty, so
+the build-and-flash workflow above is unchanged for you.
+
+There is deliberately **no setup access point**. A SoftAP would mean
+broadcasting an open network anyone in range could configure, contending for
+the single 2.4GHz radio the BLE scanner needs — a full-duty scan starves
+association badly enough that clients see the network but cannot join it — and
+carrying a web server and DNS responder for a job the serial link already does.
+Since reconfiguring means plugging into a computer anyway, it is also a natural
+moment to reflash to the current version.
 
 ### Getting back to setup
 
-Credentials outlive the network they were for — you change your Wi-Fi
-password, or the device moves house. Three ways back:
+Credentials outlive the network they were for. Two ways to clear them:
 
 | Route | How |
 |---|---|
 | Hardware | Hold **BOOT** while powering on, keep holding ~3s |
 | Serial | Press `p` in `./monitor.sh` |
-| Automatic | If a configured network stays unreachable for `WIFI_FALLBACK_MS` (default 2 min) the setup portal reappears on its own |
 
-The automatic path measures from when the link was *lost*, not from boot —
-otherwise any brief outage on a long-running device would drop it into setup
-mode instead of letting it reconnect.
+Both wipe stored settings and leave the device waiting for Improv. It keeps
+detecting glasses and driving the LED and buzzer the whole time — only the
+network side is idle.
 
 ### Security trade-offs, stated plainly
 
-- **The setup access point is open by default.** Anyone in range during setup
-  could configure the device. The window is short and the canary controls
-  nothing dangerous, so this is the default in exchange for the setup being
-  usable by someone non-technical. Set `AP_PASSWORD` in `config.h` if you would
-  rather trade that convenience away.
 - **NVS is not encrypted.** Someone with physical access to the board can read
-  the stored Wi-Fi password out of flash. This is normal for consumer IoT and
-  worth knowing rather than discovering.
+  the stored Wi-Fi password out of flash. Normal for consumer IoT, and worth
+  knowing rather than discovering.
+- **Provisioning requires physical access** to the USB port, which is a
+  meaningfully smaller attack surface than an open access point.
 
 ## How detection works
 

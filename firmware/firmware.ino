@@ -271,19 +271,16 @@ class ScanCB : public NimBLEScanCallbacks {
 
 static ScanCB g_scanCb;
 
-// The ESP32 shares one 2.4GHz radio between Wi-Fi and Bluetooth. A BLE scan at
-// full duty cycle coexists acceptably with Wi-Fi station mode, but it starves a
-// SoftAP: beacons still go out, so the setup network is visible, while clients
-// cannot win enough airtime to complete association and DHCP. Setup is brief and
-// detection is not the priority during it, so the scan pauses while the portal
-// is open and resumes the moment it closes.
-static bool g_blePausedForPortal = false;
-
 #if WIFI_ENABLED
 // Improv Wi-Fi over serial: the browser that just flashed the device hands it
 // credentials down the same USB connection. No access point, no captive portal,
-// and none of the radio contention that comes with them.
+// and none of the radio contention that comes with them -- the ESP32 shares one
+// 2.4GHz radio, and a full-duty BLE scan starves Wi-Fi association.
 static ImprovWiFi g_improv(&Serial);
+
+// Set while the radio is deliberately handed to Wi-Fi for the Improv
+// handshake, so the scan watchdog does not mistake the silence for a fault.
+static bool g_bleePausedForSetup = false;
 
 // Credentials arrive here. Persist them first -- the library only connects,
 // it does not remember, and a reboot would otherwise lose them.
@@ -291,11 +288,9 @@ static bool improvConnect(const char* ssid, const char* password) {
   Serial.printf("{\"event\":\"improv\",\"state\":\"connecting\",\"ssid\":\"%s\"}\n", ssid);
   cfgSaveWifi(ssid, password);
 
-  // Give the radio to Wi-Fi for the handshake; a full-duty BLE scan makes
-  // association unreliable on this single-radio chip.
+  g_bleePausedForSetup = true;
   NimBLEDevice::getScan()->stop();
 
-  if (portalActive()) portalStop();
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
 
@@ -307,6 +302,7 @@ static bool improvConnect(const char* ssid, const char* password) {
   bool ok = (WiFi.status() == WL_CONNECTED);
   NimBLEDevice::getScan()->start(0, false);
   g_lastAdvMs = millis();
+  g_bleePausedForSetup = false;
 
   Serial.printf("{\"event\":\"improv\",\"state\":\"%s\",\"ip\":\"%s\"}\n",
                 ok ? "connected" : "failed", WiFi.localIP().toString().c_str());
@@ -323,26 +319,14 @@ static void improvOnError(ImprovTypes::Error err) {
 }
 #endif
 
-static void serviceRadioCoexistence() {
-  bool portal = portalActive();
-  if (portal && !g_blePausedForPortal) {
-    NimBLEDevice::getScan()->stop();
-    g_blePausedForPortal = true;
-    Serial.println("{\"event\":\"ble_paused\",\"reason\":\"setup portal open\"}");
-  } else if (!portal && g_blePausedForPortal) {
-    NimBLEDevice::getScan()->start(0, false);
-    g_lastAdvMs = millis();
-    g_blePausedForPortal = false;
-    Serial.println("{\"event\":\"ble_resumed\"}");
-  }
-}
-
 // A stalled scan is this project's worst failure: everything looks healthy
 // while the device is deaf. Restart on either signal - an explicit scan end,
 // or a suspicious silence.
 static void serviceScanWatchdog() {
-  // Silence is expected while the scan is intentionally paused for setup.
-  if (g_blePausedForPortal) return;
+#if WIFI_ENABLED
+  // Silence is expected while the scan is intentionally paused for Improv.
+  if (g_bleePausedForSetup) return;
+#endif
 
   uint32_t now = millis();
 
@@ -468,42 +452,21 @@ static void isoNow(char* buf, size_t n) {
 
 #if WIFI_ENABLED
 static void wifiEnsure() {
-  static uint32_t lastTry   = 0;
-  static uint32_t downSince = 0;   // 0 = currently connected / never lost
+  static uint32_t lastTry = 0;
   uint32_t now = millis();
 
-  if (WiFi.status() == WL_CONNECTED) {
-    downSince = 0;
-    if (portalActive()) portalStop();     // on the real network; drop the AP
-    return;
-  }
+  if (WiFi.status() == WL_CONNECTED) return;
 
-  // Nothing stored to connect to: the portal is the whole user interface.
-  if (!cfgConfigured()) {
-    portalStart();
-    return;
-  }
-
-  // Measure from when the link was actually lost, not from boot. Testing
-  // uptime instead would raise the setup AP on any brief outage once the
-  // device had been up a while -- a router reboot would knock an unattended
-  // canary into setup mode instead of letting it quietly reconnect.
-  if (!downSince) downSince = now ? now : 1;
-
-  // Configured but unreachable for too long -- offer setup again rather than
-  // retrying a network that may no longer exist.
-  if (!portalActive() && (now - downSince) > WIFI_FALLBACK_MS) {
-    Serial.println("{\"event\":\"wifi\",\"state\":\"unreachable\","
-                   "\"action\":\"reopening setup portal\"}");
-    portalStart();
-  }
+  // Nothing stored: wait for credentials over Improv rather than guessing.
+  // The device still detects glasses and drives the LED and buzzer meanwhile.
+  if (!cfgConfigured()) return;
 
   if (lastTry && now - lastTry < 30000UL) return;
   lastTry = now;
 
   Serial.printf("{\"event\":\"wifi\",\"state\":\"connecting\",\"ssid\":\"%s\"}\n",
                 g_cfg.wifiSsid);
-  WiFi.mode(portalActive() ? WIFI_AP_STA : WIFI_STA);
+  WiFi.mode(WIFI_STA);
   WiFi.begin(g_cfg.wifiSsid, g_cfg.wifiPass);
 }
 #endif
@@ -736,10 +699,10 @@ static void printStatus() {
                 (unsigned long)g_scanRestarts,
                 (unsigned long)(millis() - g_lastAdvMs), statusTs);
 #if WIFI_ENABLED
-  Serial.printf(",\"wifi\":\"%s\",\"ip\":\"%s\",\"provisioned\":%d,\"portal\":%d",
+  Serial.printf(",\"wifi\":\"%s\",\"ip\":\"%s\",\"provisioned\":%d",
                 WiFi.status() == WL_CONNECTED ? "up" : "down",
                 WiFi.localIP().toString().c_str(),
-                cfgConfigured() ? 1 : 0, portalActive() ? 1 : 0);
+                cfgConfigured() ? 1 : 0);
 #endif
   Serial.println("}");
 }
@@ -782,8 +745,9 @@ static void handleSerial() {
     case 'l': ledSelfTest(); break;
 #if WIFI_ENABLED
     case 'p':
-      // Wipe credentials and restart, which brings the setup portal back.
-      // The hardware equivalent is holding BOOT while powering on.
+      // Wipe credentials and restart, returning the device to an
+      // unprovisioned state ready for Improv. The hardware equivalent is
+      // holding BOOT while powering on.
       Serial.println("{\"event\":\"reprovision\",\"action\":\"clearing credentials\"}");
       cfgClear();
       delay(300);
@@ -841,7 +805,7 @@ void setup() {
 #if WIFI_ENABLED
   checkFactoryReset();   // BOOT held at power-on wipes stored credentials
   cfgLoad();             // NVS, falling back to secrets.h defaults
-  wifiEnsure();          // raises the setup portal if nothing is stored
+  wifiEnsure();          // connects only if credentials are stored
 #endif
 
 #if WIFI_ENABLED
@@ -879,8 +843,6 @@ void loop() {
 
 #if WIFI_ENABLED
   wifiEnsure();
-  portalService();
-  serviceRadioCoexistence();
   timeEnsure();
   #if MQTT_ENABLED
     mqttEnsure();
