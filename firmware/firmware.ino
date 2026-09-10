@@ -747,6 +747,28 @@ static void ledSelfTest() {
   Serial.println("{\"event\":\"led_test\",\"done\":true}");
 }
 
+#if PIN_BUZZER >= 0
+// Piezo buzzers are sharply resonant: a few hundred hertz either side of the
+// sweet spot can be the difference between a chirp and something you notice
+// from another room. Datasheets often disagree with the actual part, so sweep
+// and listen rather than trusting a number.
+static void buzzerSweep() {
+  static const uint16_t freqs[] = {
+    1000, 1500, 2000, 2400, 2700, 3000, 3300, 3600, 4000, 4300, 4600, 5000
+  };
+  Serial.println("{\"event\":\"buzzer_sweep\",\"start\":true,"
+                 "\"note\":\"listen for the loudest step\"}");
+  for (uint8_t i = 0; i < sizeof(freqs) / sizeof(freqs[0]); ++i) {
+    Serial.printf("{\"event\":\"buzzer_sweep\",\"step\":%u,\"hz\":%u}\n",
+                  i + 1, freqs[i]);
+    tone(PIN_BUZZER, freqs[i], 700);
+    delay(1100);
+  }
+  noTone(PIN_BUZZER);
+  Serial.println("{\"event\":\"buzzer_sweep\",\"done\":true}");
+}
+#endif
+
 static void printStatus() {
   char statusTs[40];
   isoNow(statusTs, sizeof(statusTs));
@@ -806,6 +828,9 @@ static void handleSerial() {
       }
       break;
     case 'l': ledSelfTest(); break;
+#if PIN_BUZZER >= 0
+    case 'f': buzzerSweep(); break;
+#endif
 #if WIFI_ENABLED
     case 'p':
       // Wipe credentials and restart, returning the device to an
@@ -832,7 +857,7 @@ static void handleSerial() {
                    "Canary test alert");
       break;
     case 'h':
-      Serial.println("{\"event\":\"help\",\"keys\":\"s=status d=dump v=verbose l=led-test t=test-alert x=kill-scan p=reprovision h=help\"}");
+      Serial.println("{\"event\":\"help\",\"keys\":\"s=status d=dump v=verbose l=led-test f=buzzer-sweep t=test-alert x=kill-scan p=reprovision h=help\"}");
       break;
     default: break;
   }
@@ -863,7 +888,7 @@ void setup() {
                 "\"threshold\":%d,\"rssi_gate\":%d}\n",
                 FW_VERSION, ENABLE_BROAD_VENDORS,
                 ALERT_SCORE_THRESHOLD, RSSI_ALERT_THRESHOLD);
-  Serial.println("{\"event\":\"help\",\"keys\":\"s=status d=dump v=verbose l=led-test t=test-alert x=kill-scan p=reprovision h=help\"}");
+  Serial.println("{\"event\":\"help\",\"keys\":\"s=status d=dump v=verbose l=led-test f=buzzer-sweep t=test-alert x=kill-scan p=reprovision h=help\"}");
 
 #if WIFI_ENABLED
   checkFactoryReset();   // BOOT held at power-on wipes stored credentials

@@ -84,7 +84,10 @@
 // Piezo buzzer. Set to -1 to stay silent. Avoid the strapping pins
 // (0, 2, 5, 12, 15) — GPIO25/26/27/32/33 are all safe choices.
 #define PIN_BUZZER             25
-#define BUZZER_FREQ_HZ       2400
+// 4000Hz measured by ear as the loudest step of the `f` sweep on the fitted
+// piezo. Resonance is sharp and part-specific -- re-run the sweep if you swap
+// the buzzer rather than assuming this number carries over.
+#define BUZZER_FREQ_HZ       4000
 #define BUZZER_BEEPS            3
 
 // ----------------------------------------------------------- provisioning
