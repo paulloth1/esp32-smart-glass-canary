@@ -58,6 +58,20 @@ run_case() {
     wait $CAT
     kill $BT 2>/dev/null; wait 2>/dev/null
 
+    # BlueZ reports "Advertising object registered" as soon as it accepts the
+    # D-Bus object, which is NOT the same as the radio transmitting. When the
+    # controller never activates the instance, nothing goes on air and the
+    # canary correctly reports nothing -- a false negative that looks exactly
+    # like a broken detector. Insist on seeing ActiveInstances go non-zero.
+    if ! grep -q "ActiveInstances: 0x0[1-9]" "$WORK/bt_$tag.log"; then
+        echo "── case $tag ── INVALID: the adapter never actually advertised"
+        echo "   (BlueZ registered the advertisement but ActiveInstances stayed 0,"
+        echo "    so this says nothing about the canary. Retry, or restart bluetooth.)"
+        FAIL=$((FAIL+1))
+        echo
+        return
+    fi
+
     local scored alerts
     scored=$(grep '"adv"' "$log" | grep -F "$ADAPTER_MAC" | tail -1)
     alerts=$(grep -c glasses_detected "$log")

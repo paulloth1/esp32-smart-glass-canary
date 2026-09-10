@@ -92,7 +92,10 @@
 // piezo. Resonance is sharp and part-specific -- re-run the sweep if you swap
 // the buzzer rather than assuming this number carries over.
 #define BUZZER_FREQ_HZ       4000
-#define BUZZER_BEEPS            3
+#define BUZZER_BEEPS            3   // beeps in a burst
+#define BUZZER_BURSTS           3   // bursts per alert
+#define BUZZER_BEEP_GAP_MS    130   // spacing between beeps within a burst
+#define BUZZER_BURST_GAP_MS   500   // longer pause between bursts
 
 // ----------------------------------------------------------- provisioning
 

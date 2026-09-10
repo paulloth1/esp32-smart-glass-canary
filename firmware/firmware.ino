@@ -91,7 +91,8 @@ static bool          g_verbose = LOG_ALL_DEVICES;
 
 // indicator state
 static uint32_t g_alertUntil  = 0;
-static uint8_t  g_beepsLeft   = 0;
+static uint8_t  g_beepsLeft   = 0;   // half-steps left in the current burst
+static uint8_t  g_burstsLeft  = 0;   // bursts left in this alert
 static uint32_t g_nextBeepAt  = 0;
 static uint32_t g_lastBlink   = 0;
 static bool     g_ledOn       = false;
@@ -369,7 +370,9 @@ static void serviceScanWatchdog() {
 static void fireIndicators() {
   g_alertUntil = millis() + ALERT_HOLD_MS;
 #if PIN_BUZZER >= 0
-  g_beepsLeft  = BUZZER_BEEPS * 2;   // on/off pairs
+  // Each beep is two half-steps, on then off.
+  g_burstsLeft = BUZZER_BURSTS;
+  g_beepsLeft  = BUZZER_BEEPS * 2;
   g_nextBeepAt = millis();
 #endif
 }
@@ -407,9 +410,19 @@ static void serviceIndicators() {
   if (g_beepsLeft && (int32_t)(now - g_nextBeepAt) >= 0) {
     if (g_beepsLeft % 2 == 0) tone(PIN_BUZZER, BUZZER_FREQ_HZ, 90);
     else                      noTone(PIN_BUZZER);
-    g_nextBeepAt = now + 130;
+    g_nextBeepAt = now + BUZZER_BEEP_GAP_MS;
     g_beepsLeft--;
-    if (!g_beepsLeft) noTone(PIN_BUZZER);
+
+    if (!g_beepsLeft) {
+      noTone(PIN_BUZZER);
+      // Burst finished. Queue the next one after a longer gap, so the pattern
+      // reads as three groups rather than one long stutter.
+      if (g_burstsLeft) g_burstsLeft--;
+      if (g_burstsLeft) {
+        g_beepsLeft  = BUZZER_BEEPS * 2;
+        g_nextBeepAt = now + BUZZER_BURST_GAP_MS;
+      }
+    }
   }
 #endif
 }
