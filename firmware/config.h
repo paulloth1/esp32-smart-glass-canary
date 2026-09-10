@@ -82,8 +82,12 @@
 #define PIN_ALERT_LED          -1
 
 // Piezo buzzer. Set to -1 to stay silent. Avoid the strapping pins
-// (0, 2, 5, 12, 15) — GPIO25/26/27/32/33 are all safe choices.
-#define PIN_BUZZER             25
+// (0, 2, 5, 12, 15); 13, 25, 26, 27, 32 and 33 are all safe choices.
+//
+// GPIO13 is preferred over the otherwise-equivalent GPIO14: 14 emits a short
+// PWM pulse while the chip boots, which a buzzer turns into a chirp on every
+// reset. 13 is quiet until the sketch drives it.
+#define PIN_BUZZER             13
 // 4000Hz measured by ear as the loudest step of the `f` sweep on the fitted
 // piezo. Resonance is sharp and part-specific -- re-run the sweep if you swap
 // the buzzer rather than assuming this number carries over.
