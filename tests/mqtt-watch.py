@@ -74,7 +74,11 @@ try:
         ts = datetime.datetime.now().strftime("%H:%M:%S")
         retained = " (retained)" if hdr & 0x01 else ""
         print(f"{ts}  {topic}{retained}\n          {msg}", flush=True)
-except KeyboardInterrupt:
+except (KeyboardInterrupt, ConnectionError, OSError):
+    # Ctrl-C, being killed, or the broker going away are all ordinary ways for
+    # a watcher to end. Exiting quietly matters: a traceback here looks like a
+    # failure when the tool has in fact captured everything, and a non-zero
+    # exit makes it awkward to use from a script that checks for success.
     pass
 finally:
     s.close()
